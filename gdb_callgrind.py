@@ -1,5 +1,20 @@
 import gdb
 
+class Function:
+    def __init__(self, name):
+        self.name = name
+        self.positions = {}
+        self.calls = {}
+
+
+class ObjectFile:
+    def __init__(self, filename, object_filename):
+        self.filename = filename
+        self.object_filename = object_filename
+
+        self.functions = {}
+
+
 class EmitCallgrind(gdb.Command):
     def __init__(self):
         gdb.Command.__init__(self, "emit_callgrind", gdb.COMMAND_USER)
@@ -12,15 +27,13 @@ class EmitCallgrind(gdb.Command):
 
         gdb.write(f"Stepping to {final_ip}, writing output to {output_file}")
 
-        # (File, obj): function: {(addr, line): count}
-        results = {
-        }
+        object_files = {}
 
         while True:
             frame = gdb.newest_frame()
             cur_pc = frame.pc()
             fn_name = frame.name()
-            obj_file = frame.function().symtab.objfile.filename
+            obj_filename = frame.function().symtab.objfile.filename
 
             sal = frame.find_sal()
             filename = sal.symtab.filename
@@ -28,13 +41,20 @@ class EmitCallgrind(gdb.Command):
 
             addrline = (cur_pc, line)
 
-            old_count = (
-                results.setdefault(
-                    (filename, obj_file), {}).setdefault(
-                        fn_name, {}).setdefault(
-                            addrline, 0))
-            new_count = old_count + 1
-            results[(filename, obj_file)][fn_name][addrline] = new_count
+            if obj_filename not in object_files:
+                object_files[obj_filename] = ObjectFile(filename, obj_filename)
+
+            object_file = object_files[obj_filename]
+
+            if fn_name not in object_file.functions:
+                object_file.functions[fn_name] = Function(fn_name)
+
+            fn = object_file.functions[fn_name]
+
+            if addrline not in fn.positions:
+                fn.positions[addrline] = 0
+
+            fn.positions[addrline] += 1
 
             if cur_pc == final_ip:
                 break
@@ -50,14 +70,14 @@ class EmitCallgrind(gdb.Command):
         print("events: Instructions", file=cg_out)
         print(file=cg_out)
 
-        for (filename, obj_file), fdata in results.items():
-            for fname, fndata in fdata.items():
-                addrcount = sorted(list(fndata.items()))
+        for object_file in object_files.values():
+            for function in object_file.functions.values():
+                addrcount = sorted(list(function.positions.items()))
 
-                print(f"ob={obj_file}", file=cg_out)
-                print(f"fl={filename}", file=cg_out)
-                print(f"fn={fname}", file=cg_out)
-                for (addr, line), count in addrcount:
+                print(f"ob={object_file.object_filename}", file=cg_out)
+                print(f"fl={object_file.filename}", file=cg_out)
+                print(f"fn={function.name}", file=cg_out)
+                for (addr, line), count in sorted(function.positions.items()):
                     print(f"0x{addr:x} {line} {count}", file=cg_out)
                 print("", file=cg_out)
 
