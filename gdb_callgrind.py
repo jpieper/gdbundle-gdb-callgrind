@@ -16,6 +16,8 @@
 import gdb
 
 class Frame:
+    '''Simple wrapper around a gdb frame that makes it easier to access
+    all the fields we want.'''
     def __init__(self, gdb_frame=None):
         if gdb_frame is None:
             gdb_frame = gdb.newest_frame()
@@ -26,8 +28,8 @@ class Frame:
         self.fn_name = f.name()
         self.obj_filename = f.function().symtab.objfile.filename
         self.sal = f.find_sal()
-        self.filename = sal.symtab.filename
-        self.line = sal.line
+        self.filename = self.sal.symtab.filename
+        self.line = self.sal.line
         self.addrline = (self.cur_pc, self.line)
         self.obj_file_pair = (self.obj_filename, self.filename)
 
@@ -40,6 +42,10 @@ class Frame:
 
 
 class Call:
+    '''A single callgrind call site.  Not being instrumented, we won't be
+    able to track the actual number of calls, but we can track the
+    total inclusive cost.
+    '''
     def __init__(self):
         self.count = 0
         self.filename = None
@@ -53,15 +59,18 @@ class Function:
     def __init__(self, name):
         self.name = name
 
-        # Indexed by (addr, line)
+        # This keeps track of our "self" time.  It is a dictionary with
+        #
+        #  key: (addr, line)
+        # and
+        #  value: count
         self.positions = {}
 
-        # Indexed by (obj_filename, fn_name)
+        # Indexed by (obj_filename, fn_name), each value is a Call
+        # instance.
         self.calls = {}
 
 
-# TODO: One object file can have multiple filenames inside it.  Need
-# to separate them!
 class ObjectFile:
     def __init__(self, filename, object_filename):
         self.filename = filename
@@ -79,7 +88,13 @@ class EmitCallgrind(gdb.Command):
         args = gdb.string_to_argv(args)
 
         final_ip = int(args[0], 0)
-        output_file = args[1]
+
+        i = 1
+        while True:
+            output_file = f"callgrind.out.{i}"
+            if not os.path.exists(output_file):
+                break
+            i += 1
 
         gdb.write(f"Stepping to {final_ip}, writing output to {output_file}")
 
@@ -95,7 +110,7 @@ class EmitCallgrind(gdb.Command):
             object_file = object_files[f.obj_file_pair]
 
             if f.fn_name not in object_file.functions:
-                object_file.functions[f.fn_name] = Function(fn_name)
+                object_file.functions[f.fn_name] = Function(f.fn_name)
 
             fn = object_file.functions[f.fn_name]
 
@@ -105,7 +120,7 @@ class EmitCallgrind(gdb.Command):
             fn.positions[f.addrline] += 1
 
             # Try to record call-stack information.
-            old_parent = frame
+            old_parent = f
             parent = f.parent()
             while parent is not None:
                 if parent.obj_file_pair not in object_files:
@@ -139,7 +154,7 @@ class EmitCallgrind(gdb.Command):
                 old_parent = parent
                 parent = parent.parent()
 
-            if cur_pc == final_ip:
+            if f.cur_pc == final_ip:
                 break
 
             gdb.execute("stepi")
