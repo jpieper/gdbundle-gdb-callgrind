@@ -1,4 +1,43 @@
+# Copyright 2024 Josh Pieper.  jjp@pobox.com
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+
 import gdb
+
+class Frame:
+    def __init__(self, gdb_frame=None):
+        if gdb_frame is None:
+            gdb_frame = gdb.newest_frame()
+
+        f = gdb_frame
+        self.gdb_frame = f
+        self.cur_pc = f.pc()
+        self.fn_name = f.name()
+        self.obj_filename = f.function().symtab.objfile.filename
+        self.sal = f.find_sal()
+        self.filename = sal.symtab.filename
+        self.line = sal.line
+        self.addrline = (self.cur_pc, self.line)
+        self.obj_file_pair = (self.obj_filename, self.filename)
+
+
+    def parent(self):
+        parent_gdb = self.gdb_frame.older()
+        if parent_gdb.function() is None:
+            return None
+        return Frame(gdb_frame=parent_gdb)
+
 
 class Call:
     def __init__(self):
@@ -47,81 +86,58 @@ class EmitCallgrind(gdb.Command):
         object_files = {}
 
         while True:
-            frame = gdb.newest_frame()
-            cur_pc = frame.pc()
-            fn_name = frame.name()
-            obj_filename = frame.function().symtab.objfile.filename
+            f = Frame()
 
-            sal = frame.find_sal()
-            filename = sal.symtab.filename
-            line = sal.line
+            if f.obj_file_pair not in object_files:
+                object_files[f.obj_file_pair] = ObjectFile(
+                    f.filename, f.obj_filename)
 
-            addrline = (cur_pc, line)
-            obj_file_pair = (obj_filename, filename)
+            object_file = object_files[f.obj_file_pair]
 
-            if obj_file_pair not in object_files:
-                object_files[obj_file_pair] = ObjectFile(filename, obj_filename)
+            if f.fn_name not in object_file.functions:
+                object_file.functions[f.fn_name] = Function(fn_name)
 
-            object_file = object_files[obj_file_pair]
+            fn = object_file.functions[f.fn_name]
 
-            if fn_name not in object_file.functions:
-                object_file.functions[fn_name] = Function(fn_name)
+            if f.addrline not in fn.positions:
+                fn.positions[f.addrline] = 0
 
-            fn = object_file.functions[fn_name]
-
-            if addrline not in fn.positions:
-                fn.positions[addrline] = 0
-
-            fn.positions[addrline] += 1
+            fn.positions[f.addrline] += 1
 
             # Try to record call-stack information.
             old_parent = frame
-            parent = frame.older()
-            while parent and parent.function() is not None:
-                this_fn_name = parent.name()
-                this_cur_pc = parent.pc()
-                this_obj_filename = parent.function().symtab.objfile.filename
-                this_sal = parent.find_sal()
-                this_filename = sal.symtab.filename
-                this_line = sal.line
-                this_obj_file_pair = (this_obj_filename, this_filename)
+            parent = f.parent()
+            while parent is not None:
+                if parent.obj_file_pair not in object_files:
+                    object_files[parent.obj_file_pair] = \
+                        ObjectFile(parent.filename, parent.obj_filename)
 
-                if this_obj_file_pair not in object_files:
-                    object_files[this_obj_file_pair] = ObjectFile(this_filename, this_obj_filename)
+                this_object_file = object_files[parent.obj_file_pair]
 
-                this_object_file = object_files[this_obj_file_pair]
+                if parent.fn_name not in this_object_file.functions:
+                    this_object_file.functions[parent.fn_name] = \
+                        Function(parent.fn_name)
 
-                if this_fn_name not in this_object_file.functions:
-                    this_object_file.functions[this_fn_name] = Function(this_fn_name)
+                this_fn = this_object_file.functions[parent.fn_name]
 
-                this_fn = this_object_file.functions[this_fn_name]
-
-                call_obj_fn = (obj_filename, fn_name)
+                call_obj_fn = (old_parent.obj_filename, old_parent.fn_name)
                 if call_obj_fn not in this_fn.calls:
                     this_fn.calls[call_obj_fn] = Call()
 
                 this_call = this_fn.calls[call_obj_fn]
-                this_call.filename = this_filename
+                this_call.filename = parent.filename
 
                 if (this_call.destination_position is None or
-                    this_cur_pc < this_call.destination_position):
-                    this_call.destination_position = this_cur_pc
+                    parent.cur_pc < this_call.destination_position):
+                    this_call.destination_position = parent.cur_pc
 
-                this_call.source_line = line
+                this_call.source_line = old_parent.line
 
-                this_call.source_position = cur_pc
+                this_call.source_position = old_parent.cur_pc
                 this_call.inclusive_cost += 1
 
-
                 old_parent = parent
-                fn_name = this_fn_name
-                obj_filename = this_obj_filename
-                sal = this_sal
-                filename = this_filename
-                line = this_line
-                cur_pc = this_cur_pc
-
-                parent = parent.older()
+                parent = parent.parent()
 
             if cur_pc == final_ip:
                 break
