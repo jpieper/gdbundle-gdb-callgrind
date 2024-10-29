@@ -13,6 +13,24 @@
 # limitations under the License.
 
 
+'''Emit a callgrind/kcachegrind compatible output file with call tree
+information using gdb single instruction stepping.  This can be used
+with remote targets like microcontrollers, and can use full gdb debug
+information to generate useful call stacks, including with inlined
+functions.
+
+Usage:  From within gdb run:
+
+> source gdb_callgrind.py
+
+> emit_callgrind [end_address]
+
+Where 'end_address' is an optional integer address to stop stepping.
+If omitted, then stepping will proceed until the end of the current
+function.
+'''
+
+
 import gdb
 
 class Frame:
@@ -87,8 +105,27 @@ class EmitCallgrind(gdb.Command):
     def invoke(self, args, from_tty):
         args = gdb.string_to_argv(args)
 
-        final_ip = int(args[0], 0)
+        final_ip = None
 
+        if len(args) > 0:
+            final_ip = int(args[0], 0)
+        else:
+            # This mimic's the logic of gdb's "finish" command, which
+            # finds the next higher frame that isn't a tailcall or
+            # signal trampoline frame.
+            f = gdb.newest_frame().older()
+            while True:
+                if (f.type() == gdb.TAILCALL_FRAME or
+                    f.type() == gdb.SIGTRAMP_FRAME):
+                    f = f.older()
+                else:
+                    break
+            final_ip = f.pc()
+
+
+        # Callgrind by default writes files based on the thread ID.
+        # For remote targets, there often is no thread ID, so just
+        # find a deconflicted file in the current directory.
         i = 1
         while True:
             output_file = f"callgrind.out.{i}"
@@ -96,12 +133,15 @@ class EmitCallgrind(gdb.Command):
                 break
             i += 1
 
-        gdb.write(f"Stepping to {final_ip}, writing output to {output_file}")
+        gdb.write(f"Stepping to 0x{final_ip:x}, writing output to {output_file}")
 
         object_files = {}
         total_instr_count = 0
 
         while True:
+            if gdb.newest_frame().pc() == final_ip:
+                break
+
             f = Frame()
 
             if f.obj_file_pair not in object_files:
@@ -142,7 +182,7 @@ class EmitCallgrind(gdb.Command):
                     this_fn.calls[call_obj_fn] = Call()
 
                 this_call = this_fn.calls[call_obj_fn]
-                this_call.filename = parent.filename
+                this_call.filename = old_parent.filename
 
                 if (this_call.destination_position is None or
                     parent.cur_pc < this_call.destination_position):
@@ -155,9 +195,6 @@ class EmitCallgrind(gdb.Command):
 
                 old_parent = parent
                 parent = parent.parent()
-
-            if f.cur_pc == final_ip:
-                break
 
             gdb.execute("stepi")
 
