@@ -99,6 +99,7 @@ class EmitCallgrind(gdb.Command):
         gdb.write(f"Stepping to {final_ip}, writing output to {output_file}")
 
         object_files = {}
+        total_instr_count = 0
 
         while True:
             f = Frame()
@@ -118,6 +119,7 @@ class EmitCallgrind(gdb.Command):
                 fn.positions[f.addrline] = 0
 
             fn.positions[f.addrline] += 1
+            total_instr_count += 1
 
             # Try to record call-stack information.
             old_parent = f
@@ -166,6 +168,7 @@ class EmitCallgrind(gdb.Command):
         print("creator: gdb_callgrind", file=cg_out)
         print("positions: instr line", file=cg_out)
         print("events: Instructions", file=cg_out)
+        print(f"summary: {total_instr_count}", file=cg_out)
         print(file=cg_out)
 
         for object_file in object_files.values():
