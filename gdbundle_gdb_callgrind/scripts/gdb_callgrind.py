@@ -188,9 +188,9 @@ class EmitCallgrind(gdb.Command):
                     parent.cur_pc < this_call.destination_position):
                     this_call.destination_position = parent.cur_pc
 
-                this_call.source_line = old_parent.line
+                this_call.source_line = parent.line
 
-                this_call.source_position = old_parent.cur_pc
+                this_call.source_position = parent.cur_pc
                 this_call.inclusive_cost += 1
 
                 old_parent = parent
